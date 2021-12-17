@@ -106,7 +106,7 @@ misc_arg.add_argument(
 
 # Dataset specific configurations
 data_arg = add_argument_group('Data')
-data_arg.add_argument('--dataset', type=str, default='ThreeDMatchPairDataset')
+data_arg.add_argument('--dataset', type=str, default='GTAVDataset')
 data_arg.add_argument('--voxel_size', type=float, default=0.025)
 data_arg.add_argument(
     '--threed_match_dir', type=str, default="/home/chrischoy/datasets/FCGF/threedmatch")
@@ -119,6 +119,10 @@ data_arg.add_argument(
     help='max time difference between pairs (non inclusive)')
 data_arg.add_argument('--kitti_date', type=str, default='2011_09_26')
 
+#For Test
+testing = add_argument_group('Testing')
+testing.add_argument('--save_dir', default=None, type=str)
+testing.add_argument('--test_num_workers', default=1, type=int)
 
 def get_config():
   args = parser.parse_args()

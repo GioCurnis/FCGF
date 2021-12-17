@@ -13,7 +13,7 @@ from model import load_model
 from lib.data_loaders import make_data_loader
 from util.pointcloud import make_open3d_point_cloud, make_open3d_feature
 from lib.timer import AverageMeter, Timer
-
+from config import get_config
 import MinkowskiEngine as ME
 
 ch = logging.StreamHandler(sys.stdout)
@@ -126,19 +126,20 @@ def main(config):
 
 
 if __name__ == '__main__':
-  parser = argparse.ArgumentParser()
-  parser.add_argument('--save_dir', default=None, type=str)
-  parser.add_argument('--test_phase', default='test', type=str)
-  parser.add_argument('--test_num_thread', default=5, type=int)
-  parser.add_argument('--kitti_root', type=str, default="/data/kitti/")
-  args = parser.parse_args()
+  #parser = argparse.ArgumentParser()
+  #parser.add_argument('--save_dir', default=None, type=str)
+  #parser.add_argument('--test_phase', default='test', type=str)
+  #parser.add_argument('--test_num_thread', default=5, type=int)
+  #parser.add_argument('--kitti_root', type=str, default="/media/RAIDONE/DATASETS/KITTI/ODOMETRY")
+  #args = parser.parse_args()
 
-  config = json.load(open(args.save_dir + '/config.json', 'r'))
-  config = edict(config)
-  config.save_dir = args.save_dir
-  config.test_phase = args.test_phase
-  config.kitti_root = args.kitti_root
-  config.kitti_odometry_root = args.kitti_root + '/dataset'
-  config.test_num_thread = args.test_num_thread
+  #config = json.load(open(args.save_dir + '/config.json', 'r'))
+  #config = edict(config)
+  config = get_config()
+  #config.save_dir = args.save_dir
+  #config.test_phase = args.test_phase
+  #config.kitti_root = args.kitti_root
+  #config.kitti_odometry_root = args.kitti_root
+  #config.test_num_thread = args.test_num_thread
 
   main(config)

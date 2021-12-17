@@ -3,6 +3,7 @@
 # Written by Chris Choy <chrischoy@ai.stanford.edu>
 # Distributed under MIT License
 import logging
+import multiprocessing
 import random
 import torch
 import torch.utils.data
@@ -11,6 +12,8 @@ import glob
 import os
 from scipy.linalg import expm, norm
 import pathlib
+import multiprocessing as mp
+from functools import partial
 
 from util.pointcloud import get_matching_indices, make_open3d_point_cloud
 import lib.transforms as t
@@ -547,8 +550,9 @@ class KITTINMPairDataset(KITTIPairDataset):
                random_scale=True,
                manual_seed=False,
                config=None):
+
     if self.IS_ODOMETRY:
-      self.root = root = os.path.join(config.kitti_root, 'dataset')
+      self.root = root = config.kitti_root
       random_rotation = self.TEST_RANDOM_ROTATION
     else:
       self.date = config.kitti_date
@@ -633,7 +637,174 @@ class ThreeDMatchPairDataset(IndoorPairDataset):
   }
 
 
-ALL_DATASETS = [ThreeDMatchPairDataset, KITTIPairDataset, KITTINMPairDataset]
+class GTAVDataset(PairDataset):
+  AUGMENT = None
+  DATA_FILES = {
+    'train': './config/train_gtav.txt',
+    'val': './config/val_gtav.txt',
+    'test': './config/test_gtav.txt'
+  }
+  TEST_RANDOM_ROTATION = True
+  PAIR_DISTANCE = 4
+
+  def __init__(self,
+               phase,
+               transform=None,
+               random_rotation=True,
+               random_scale=True,
+               manual_seed=False,
+               config=None):
+
+
+    self.root = root = config.kitti_root
+    random_rotation = self.TEST_RANDOM_ROTATION
+
+    self.date = config.kitti_date
+
+    PairDataset.__init__(self, phase, transform, random_rotation, random_scale,
+                         manual_seed, config)
+
+    logging.info(f"Loading the subset {phase} from {root}")
+
+    subset_names = open(self.DATA_FILES[phase]).read().split()
+    for dirname in subset_names:
+      run_id, run_name = dirname.split(sep=',')
+      logging.info(f'run id: {run_id}, run_name: {run_name}')
+      inames = self.get_all_scan_ids(run_name)
+      #logging.info(inames)
+      for start_time in range(0, len(inames)):
+        for time_diff in range(0, self.PAIR_DISTANCE):
+          pair_time = time_diff + start_time
+          if pair_time < len(inames):
+            if inames[pair_time] in inames:
+                self.files.append((run_id, run_name, inames[start_time], inames[pair_time]))
+
+    logging.info(len(self.files))
+    weak_pair = [1431, 2517, 2601, 8303, 15685, 12915, 2957, 15920, 18199, 3245, 3080, 13693, 2617,
+                 3991, 12913, 7327, 3061, 3994, 2611]
+    weak_pair.sort()
+    popped = 0
+    if self.phase == 'train':
+      for pair in weak_pair:
+        logging.info(f'removing {pair-popped}: {self.files[pair][2]} & {self.files[pair][3]}')
+        self.files.pop(pair-popped)
+        popped += 1
+    '''
+    iterable = range(0, len(self.files))
+    l = mp.Lock()
+    func = partial(self.remove_weak_pair, l)
+    pool = mp.Pool(initializer=self.init_lock, initargs=(l,))
+    pool.map(self.remove_weak_pair, iterable)
+    pool.close()
+    pool.join()
+
+    #logging.info(self.files)
+    logging.info(len(self.files))
+    '''
+
+  def init_lock(self, l):
+    global lock
+    lock = l
+
+  def remove_weak_pair(self, idx):
+    f0, f1 = self.files[idx][2], self.files[idx][3]
+    pcd0 = o3d.io.read_point_cloud(f0)
+    pcd1 = o3d.io.read_point_cloud(f1)
+    trans = np.eye(4)
+    matching_search_voxel_size = self.matching_search_voxel_size
+    matches = get_matching_indices(pcd0, pcd1, trans, matching_search_voxel_size)
+    if len(matches) < 1000:
+      logging.info(f'weak pair: {f0} & {f1} - {len(matches)}')
+      self.files.pop(idx)
+    else:
+      logging.info(f'pair ok: {f0} & {f1} - {len(matches)}')
+
+  def get_all_scan_ids(self, run_name):
+    fnames = glob.glob(self.root + '/' + run_name + '/' + run_name + '/*.pcd')
+    logging.info(f'{self.root}/{run_name}/{run_name}/*.pcd')
+    assert len(fnames) > 0, f"Make sure that the path {self.root} has run: {run_name}"
+    fnames.sort()
+    return fnames
+
+  def get_velodyne_fn(self,t):
+    fname = os.path.join(self.root, t)
+    return fname
+
+  def __getitem__(self, idx):
+    run_id, run_name = self.files[idx][0], self.files[idx][1]
+    t0, t1 = self.files[idx][2], self.files[idx][3]
+    fname0 = self.get_velodyne_fn(t0)
+    fname1 = self.get_velodyne_fn(t1)
+
+    # XYZ and reflectance
+    pcd_start0 = o3d.io.read_point_cloud(fname0)
+    pcd_start1 = o3d.io.read_point_cloud(fname1)
+
+    xyz0 = np.asarray(pcd_start0.points)
+    xyz1 = np.asarray(pcd_start1.points)
+
+    if self.random_rotation:
+      T0 = sample_random_trans(xyz0, self.randg, np.pi / 4)
+      T1 = sample_random_trans(xyz1, self.randg, np.pi / 4)
+      trans = T1 @ np.linalg.inv(T0)
+
+      xyz0 = self.apply_transform(xyz0, T0)
+      xyz1 = self.apply_transform(xyz1, T1)
+    else:
+      assert False, f"set random_rotation to True"
+
+    matching_search_voxel_size = self.matching_search_voxel_size
+    if self.random_scale and random.random() < 0.95:
+      scale = self.min_scale + \
+              (self.max_scale - self.min_scale) * random.random()
+      matching_search_voxel_size *= scale
+      xyz0 = scale * xyz0
+      xyz1 = scale * xyz1
+
+    # Voxelization
+    xyz0_th = torch.from_numpy(xyz0)
+    xyz1_th = torch.from_numpy(xyz1)
+
+    _, sel0 = ME.utils.sparse_quantize(xyz0_th / self.voxel_size, return_index=True)
+    _, sel1 = ME.utils.sparse_quantize(xyz1_th / self.voxel_size, return_index=True)
+
+    # Make point clouds using voxelized points
+    pcd0 = make_open3d_point_cloud(xyz0[sel0])
+    pcd1 = make_open3d_point_cloud(xyz1[sel1])
+
+    # Get matches
+    matches = get_matching_indices(pcd0, pcd1, trans, matching_search_voxel_size)
+    if len(matches) < 1000:
+      logging.info(f"weak match, idx: {idx}, {run_name}, {t0}, {t1} -matches: {len(matches)}")
+
+
+    # Get features
+    npts0 = len(sel0)
+    npts1 = len(sel1)
+
+    feats_train0, feats_train1 = [], []
+
+    unique_xyz0_th = xyz0_th[sel0]
+    unique_xyz1_th = xyz1_th[sel1]
+
+    feats_train0.append(torch.ones((npts0, 1)))
+    feats_train1.append(torch.ones((npts1, 1)))
+
+    feats0 = torch.cat(feats_train0, 1)
+    feats1 = torch.cat(feats_train1, 1)
+
+    coords0 = torch.floor(unique_xyz0_th / self.voxel_size)
+    coords1 = torch.floor(unique_xyz1_th / self.voxel_size)
+
+    if self.transform:
+      coords0, feats0 = self.transform(coords0, feats0)
+      coords1, feats1 = self.transform(coords1, feats1)
+
+    return (unique_xyz0_th.float(), unique_xyz1_th.float(), coords0.int(),
+            coords1.int(), feats0.float(), feats1.float(), matches, trans)
+
+
+ALL_DATASETS = [ThreeDMatchPairDataset, KITTIPairDataset, KITTINMPairDataset, GTAVDataset]
 dataset_str_mapping = {d.__name__: d for d in ALL_DATASETS}
 
 
@@ -647,7 +818,7 @@ def make_data_loader(config, phase, batch_size, num_threads=0, shuffle=None):
                   ', '.join(dataset_str_mapping.keys()))
 
   Dataset = dataset_str_mapping[config.dataset]
-
+  logging.info(Dataset)
   use_random_scale = False
   use_random_rotation = False
   transforms = []

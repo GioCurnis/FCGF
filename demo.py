@@ -1,3 +1,4 @@
+import logging
 import os
 import numpy as np
 import argparse
@@ -46,7 +47,9 @@ def demo(config):
   vis_pcd = get_colored_point_cloud_feature(vis_pcd,
                                             feature.detach().cpu().numpy(),
                                             config.voxel_size)
-  o3d.visualization.draw_geometries([vis_pcd])
+  #o3d.visualization.draw_geometries([vis_pcd])
+  #o3d.io.write_triangle_mesh('/home/curnis/result/fcgf/mesh.obj', vis_pcd)
+  print(type(vis_pcd))
 
 
 if __name__ == '__main__':
